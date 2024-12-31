@@ -12,12 +12,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         
-      - name: Set up JDK
+      - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
-          java-version: '11'
+          java-version: '17'
           distribution: 'temurin'
           cache: 'maven'
+          
+      - name: Set up Maven
+        uses: stCarolas/setup-maven@v4.5
+        with:
+          maven-version: '3.9.5'
           
       - name: Build with Maven
         run: mvn clean package -DskipTests
@@ -39,10 +44,10 @@ jobs:
           echo "Current IP: $CURRENT_IP"
           
       - name: Create Temporary Firewall Rule
-        id: firewall
         run: |
+          # Generate rule name and save to a file
           RULE_NAME="temp-deploy-$(date +%s)"
-          echo "RULE_NAME=$RULE_NAME" >> $GITHUB_OUTPUT
+          echo "$RULE_NAME" > /tmp/rule_name
           
           gcloud compute firewall-rules create $RULE_NAME \
             --direction=INGRESS \
@@ -68,6 +73,11 @@ jobs:
           # Copy service file and start application
           gcloud compute ssh ${{ secrets.VM_NAME }} --zone=asia-south1-a \
             --command="
+              # Install Java 17 if not present
+              if ! command -v java &> /dev/null || ! java -version 2>&1 | grep -q 'version \"17'; then
+                sudo apt-get update && sudo apt-get install -y openjdk-17-jdk
+              fi
+              
               sudo tee /etc/systemd/system/java-app.service << EOF
               [Unit]
               Description=Java Application Service
@@ -93,4 +103,10 @@ jobs:
       - name: Remove Temporary Firewall Rule
         if: always()
         run: |
-          gcloud compute firewall-rules delete ${{ steps.firewall.outputs.RULE_NAME }} --quiet
+          RULE_NAME=$(cat /tmp/rule_name)
+          if [ ! -z "$RULE_NAME" ]; then
+            gcloud compute firewall-rules delete "$RULE_NAME" --quiet
+          else
+            echo "No firewall rule name found"
+            exit 1
+          fi
